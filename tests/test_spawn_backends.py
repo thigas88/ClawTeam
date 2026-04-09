@@ -188,12 +188,22 @@ def test_tmux_backend_exports_spawn_path_for_agent_commands(monkeypatch, tmp_pat
 
     new_session = next(call for call in run_calls if call[:3] == ["tmux", "new-session", "-d"])
     full_cmd = new_session[-1]
-    assert f"export PATH={clawteam_bin.parent}:/usr/bin:/bin" in full_cmd
-    assert f"export CLAWTEAM_BIN={clawteam_bin}" in full_cmd
-    assert "export CLAWTEAM_DATA_DIR=/tmp/oh-data" in full_cmd
-    assert "export GOOGLE_CLOUD_PROJECT=demo-project" in full_cmd
+    # Env vars are now written to a temp file and sourced, not inlined
+    import re as _re
+    env_file_match = _re.search(r"\. '?(/tmp/clawteam-env-[^';\s]+\.env\.sh)'?", full_cmd)
+    assert env_file_match, f"env source command not found in: {full_cmd}"
+    env_file_path = env_file_match.group(1)
+    env_file_content = open(env_file_path).read()
+    # PATH should contain the clawteam bin directory
+    assert any(str(clawteam_bin.parent) in line for line in env_file_content.splitlines() if line.startswith("export PATH="))
+    assert any(str(clawteam_bin) in line for line in env_file_content.splitlines() if line.startswith("export CLAWTEAM_BIN="))
+    assert any("/tmp/oh-data" in line for line in env_file_content.splitlines() if line.startswith("export CLAWTEAM_DATA_DIR="))
+    assert any("demo-project" in line for line in env_file_content.splitlines() if line.startswith("export GOOGLE_CLOUD_PROJECT="))
     assert "cd /tmp/demo &&" in full_cmd
-    assert "PROGRAMFILES(X86)" not in full_cmd
+    assert "PROGRAMFILES(X86)" not in env_file_content
+    # Cleanup env file
+    import os as _os
+    _os.unlink(env_file_path)
     # Exit hook is now set via tmux set-hook (not inline in command string)
     set_hook_calls = [c for c in run_calls if c[:2] == ["tmux", "set-hook"]]
     assert any("pane-exited" in c for c in set_hook_calls), "pane-exited hook not set"

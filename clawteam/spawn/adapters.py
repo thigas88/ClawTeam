@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,7 +36,11 @@ class NativeCliAdapter:
         post_launch_prompt = None
 
         if skip_permissions:
-            if is_claude_command(normalized_command):
+            # Claude Code rejects --dangerously-skip-permissions when running
+            # as root/sudo.  Detect this and silently omit the flag so spawned
+            # agents can still start.
+            _is_root = os.getuid() == 0
+            if is_claude_command(normalized_command) and not _is_root:
                 final_command.append("--dangerously-skip-permissions")
             elif is_codex_command(normalized_command):
                 final_command.append("--dangerously-bypass-approvals-and-sandbox")

@@ -107,7 +107,20 @@ class TmuxBackend(SpawnBackend):
         # WSL includes names like `PROGRAMFILES(X86)`, which would abort the
         # shell before the pane becomes observable.
         export_vars = {k: v for k, v in env_vars.items() if _SHELL_ENV_KEY_RE.fullmatch(k)}
-        export_str = "; ".join(f"export {k}={shlex.quote(v)}" for k, v in export_vars.items())
+
+        # Write env vars to a temp file and source it to avoid exceeding
+        # tmux's command-length limit (~16k chars).  The file is deliberately
+        # NOT deleted here — the sourcing shell needs it at startup.  A
+        # self-cleanup line inside the file removes it after it has been read.
+        env_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".env.sh", delete=False, prefix="clawteam-env-"
+        )
+        for k, v in export_vars.items():
+            env_file.write(f"export {k}={shlex.quote(v)}\n")
+        # Self-cleanup: remove the env file after sourcing
+        env_file.write(f"rm -f {shlex.quote(env_file.name)}\n")
+        env_file.close()
+        env_source_cmd = f". {shlex.quote(env_file.name)}"
 
         cmd_str = " ".join(shlex.quote(c) for c in final_command)
         exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
@@ -115,9 +128,9 @@ class TmuxBackend(SpawnBackend):
         # don't refuse to start when the leader is itself a claude session.
         unset_clause = "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION 2>/dev/null; "
         if cwd:
-            full_cmd = f"{unset_clause}{export_str}; cd {shlex.quote(cwd)} && {cmd_str}"
+            full_cmd = f"{unset_clause}{env_source_cmd}; cd {shlex.quote(cwd)} && {cmd_str}"
         else:
-            full_cmd = f"{unset_clause}{export_str}; {cmd_str}"
+            full_cmd = f"{unset_clause}{env_source_cmd}; {cmd_str}"
 
         # Check if tmux session exists
         check = subprocess.run(
